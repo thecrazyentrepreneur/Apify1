@@ -1,0 +1,9 @@
+{
+  "actorSpecification": 1,
+  "name": "influencer-data-scraper",
+  "title": "Influencer Data Scraper",
+  "description": "Scrapes creator data from Instagram, TikTok, and YouTube",
+  "version": "1.0.0",
+  "input": "./actor_config/input_schema.json",
+  "dockerfile": "./Dockerfile"
+}
