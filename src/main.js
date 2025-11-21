@@ -13,7 +13,7 @@ const {
 } = input;
 
 if (!platformLinks || platformLinks.length === 0) {
-    throw new Error('No platform links provided. Please provide at least one creator profile URL.');
+    throw new Error('No platform links provided.');
 }
 
 const results = [];
@@ -48,7 +48,7 @@ const crawler = new PuppeteerCrawler({
                 'Date': currentDate,
                 'Executive': executive || '',
                 'Team': team || '',
-                'Creator Name': creatorData.creatorName || '',
+                'Creator Name': creatorData.creatorName || 'Unknown',
                 'Category': category || '',
                 'Platform': creatorData.platform || '',
                 'Platform Link': url,
@@ -56,20 +56,38 @@ const crawler = new PuppeteerCrawler({
                 'Region': creatorData.region || '',
                 'Cost': '',
                 'Avg Views': creatorData.avgViews || 0,
-                'ER': creatorData.engagementRate || '',
+                'ER': creatorData.engagementRate || '0.00',
                 'Client Comment': '',
                 'TCE Comment': ''
             };
 
             results.push(result);
-            log.info(`Successfully scraped: ${creatorData.creatorName}`);
+            log.info(`Scraped: ${creatorData.creatorName} | Followers: ${creatorData.followers} | Views: ${creatorData.avgViews} | ER: ${creatorData.engagementRate}%`);
 
         } catch (error) {
-            log.error(`Failed to scrape ${url}: ${error.message}`);
+            log.error(`Failed: ${url} - ${error.message}`);
+            
+            results.push({
+                'Internal Comment': internalComment || '',
+                'Date': new Date().toLocaleDateString('en-GB'),
+                'Executive': executive || '',
+                'Team': team || '',
+                'Creator Name': 'ERROR',
+                'Category': category || '',
+                'Platform': url.includes('instagram') ? 'Instagram' : url.includes('tiktok') ? 'TikTok' : 'YouTube',
+                'Platform Link': url,
+                'Followers': 0,
+                'Region': '',
+                'Cost': '',
+                'Avg Views': 0,
+                'ER': '0.00',
+                'Client Comment': '',
+                'TCE Comment': error.message
+            });
         }
     },
     maxRequestsPerCrawl: platformLinks.length,
-    navigationTimeoutSecs: 60,
+    navigationTimeoutSecs: 90,
     launchContext: {
         launchOptions: {
             headless: true,
@@ -78,47 +96,92 @@ const crawler = new PuppeteerCrawler({
 });
 
 async function scrapeInstagram(page, url, log) {
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
-    await page.waitForTimeout(3000);
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 90000 });
+    await page.waitForTimeout(7000);
 
     const data = await page.evaluate(() => {
         const extractNumber = (text) => {
             if (!text) return 0;
-            text = text.toLowerCase().replace(/,/g, '');
-            if (text.includes('k')) return parseFloat(text) * 1000;
-            if (text.includes('m')) return parseFloat(text) * 1000000;
-            return parseInt(text) || 0;
+            text = text.toString().toLowerCase().replace(/,/g, '').replace(/\s/g, '');
+            
+            if (text.includes('k')) return Math.round(parseFloat(text.replace('k', '')) * 1000);
+            if (text.includes('m')) return Math.round(parseFloat(text.replace('m', '')) * 1000000);
+            if (text.includes('b')) return Math.round(parseFloat(text.replace('b', '')) * 1000000000);
+            
+            const num = parseInt(text.replace(/[^0-9]/g, ''));
+            return isNaN(num) ? 0 : num;
         };
 
-        const nameElement = document.querySelector('header h2, header span') || 
-                          document.querySelector('[class*="username"]');
-        const creatorName = nameElement?.textContent?.trim() || '';
+        let creatorName = '';
+        const nameSelectors = ['header h2', 'header h1', 'header span', '[class*="username"]', 'h1', 'h2'];
+        for (const selector of nameSelectors) {
+            const element = document.querySelector(selector);
+            if (element && element.textContent.trim()) {
+                creatorName = element.textContent.trim();
+                break;
+            }
+        }
 
-        const followersElement = Array.from(document.querySelectorAll('a, span')).find(
-            el => el.textContent.includes('followers')
-        );
-        const followersText = followersElement?.textContent?.match(/[\d,.]+[kKmM]?/)?.[0] || '0';
-        const followers = extractNumber(followersText);
+        let followers = 0;
+        const followerSelectors = [
+            'a[href*="followers"] span',
+            'button span',
+            'header section ul li button span',
+            'header section ul li a span'
+        ];
+        for (const selector of followerSelectors) {
+            const elements = document.querySelectorAll(selector);
+            for (const el of elements) {
+                const text = el.textContent.trim();
+                if (text.includes('follower') || /^\d+[KkMmBb]?$/.test(text)) {
+                    const match = text.match(/[\d,.]+[KkMmBb]?/);
+                    if (match) {
+                        followers = extractNumber(match[0]);
+                        if (followers > 0) break;
+                    }
+                }
+            }
+            if (followers > 0) break;
+        }
 
-        const viewElements = Array.from(document.querySelectorAll('[class*="views"], span')).filter(
-            el => el.textContent.match(/[\d,.]+[kKmM]?\s*(views|plays)/i)
-        );
-        
         let totalViews = 0;
         let postCount = 0;
-        viewElements.slice(0, 12).forEach(el => {
-            const viewText = el.textContent.match(/[\d,.]+[kKmM]?/)?.[0];
-            if (viewText) {
-                totalViews += extractNumber(viewText);
-                postCount++;
+        const viewSelectors = ['span[class*="views"]', 'span[class*="plays"]', 'div[class*="views"]'];
+        for (const selector of viewSelectors) {
+            const elements = document.querySelectorAll(selector);
+            for (const el of elements) {
+                const text = el.textContent.trim();
+                const match = text.match(/[\d,.]+[KkMmBb]?/);
+                if (match && postCount < 12) {
+                    totalViews += extractNumber(match[0]);
+                    postCount++;
+                }
             }
-        });
-        const avgViews = postCount > 0 ? Math.round(totalViews / postCount) : 0;
+            if (postCount >= 12) break;
+        }
 
-        const engagementRate = followers > 0 ? ((avgViews / followers) * 100).toFixed(2) : '0';
+        if (postCount === 0) {
+            const likeElements = document.querySelectorAll('button span, section span');
+            let likeCount = 0;
+            for (const el of likeElements) {
+                const text = el.textContent.trim();
+                const match = text.match(/^[\d,.]+[KkMmBb]?\s*(likes?|views?)?$/i);
+                if (match && likeCount < 12) {
+                    const num = extractNumber(text);
+                    if (num > 0) {
+                        totalViews += num;
+                        likeCount++;
+                    }
+                }
+            }
+            postCount = likeCount;
+        }
+
+        const avgViews = postCount > 0 ? Math.round(totalViews / postCount) : 0;
+        const engagementRate = followers > 0 && avgViews > 0 ? ((avgViews / followers) * 100).toFixed(2) : '0.00';
 
         return {
-            creatorName,
+            creatorName: creatorName || 'Unknown',
             followers,
             avgViews,
             engagementRate,
@@ -127,48 +190,67 @@ async function scrapeInstagram(page, url, log) {
         };
     });
 
+    log.info(`Instagram: ${JSON.stringify(data)}`);
     return data;
 }
 
 async function scrapeTikTok(page, url, log) {
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
-    await page.waitForTimeout(3000);
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 90000 });
+    await page.waitForTimeout(7000);
 
     const data = await page.evaluate(() => {
         const extractNumber = (text) => {
             if (!text) return 0;
-            text = text.toLowerCase().replace(/,/g, '');
-            if (text.includes('k')) return parseFloat(text) * 1000;
-            if (text.includes('m')) return parseFloat(text) * 1000000;
-            if (text.includes('b')) return parseFloat(text) * 1000000000;
-            return parseInt(text) || 0;
+            text = text.toString().toLowerCase().replace(/,/g, '').replace(/\s/g, '');
+            
+            if (text.includes('k')) return Math.round(parseFloat(text.replace('k', '')) * 1000);
+            if (text.includes('m')) return Math.round(parseFloat(text.replace('m', '')) * 1000000);
+            if (text.includes('b')) return Math.round(parseFloat(text.replace('b', '')) * 1000000000);
+            
+            const num = parseInt(text.replace(/[^0-9]/g, ''));
+            return isNaN(num) ? 0 : num;
         };
 
-        const nameElement = document.querySelector('[data-e2e="user-title"], h1, h2');
-        const creatorName = nameElement?.textContent?.trim() || '';
+        let creatorName = '';
+        const nameSelectors = ['[data-e2e="user-title"]', 'h1', 'h2', 'h3'];
+        for (const selector of nameSelectors) {
+            const el = document.querySelector(selector);
+            if (el && el.textContent.trim()) {
+                creatorName = el.textContent.trim();
+                break;
+            }
+        }
 
-        const followersElement = document.querySelector('[data-e2e="followers-count"], [title*="Followers"]');
-        const followersText = followersElement?.textContent?.trim() || '0';
-        const followers = extractNumber(followersText);
+        let followers = 0;
+        const followerSelectors = ['[data-e2e="followers-count"]', '[title*="Followers"]', 'strong'];
+        for (const selector of followerSelectors) {
+            const el = document.querySelector(selector);
+            if (el) {
+                followers = extractNumber(el.textContent);
+                if (followers > 0) break;
+            }
+        }
 
-        const videoElements = document.querySelectorAll('[data-e2e="video-views"]');
+        const videoElements = document.querySelectorAll('[data-e2e="video-views"], strong, span');
         let totalViews = 0;
         let videoCount = 0;
-        
-        videoElements.forEach((el, index) => {
-            if (index < 12) {
-                const viewText = el.textContent.trim();
-                totalViews += extractNumber(viewText);
-                videoCount++;
+        for (const el of videoElements) {
+            if (videoCount >= 12) break;
+            const text = el.textContent.trim();
+            if (text.match(/\d+[KMB]?/)) {
+                const views = extractNumber(text);
+                if (views > 0) {
+                    totalViews += views;
+                    videoCount++;
+                }
             }
-        });
+        }
         
         const avgViews = videoCount > 0 ? Math.round(totalViews / videoCount) : 0;
-
-        const engagementRate = followers > 0 ? ((avgViews / followers) * 100).toFixed(2) : '0';
+        const engagementRate = followers > 0 && avgViews > 0 ? ((avgViews / followers) * 100).toFixed(2) : '0.00';
 
         return {
-            creatorName,
+            creatorName: creatorName || 'Unknown',
             followers,
             avgViews,
             engagementRate,
@@ -177,50 +259,72 @@ async function scrapeTikTok(page, url, log) {
         };
     });
 
+    log.info(`TikTok: ${JSON.stringify(data)}`);
     return data;
 }
 
 async function scrapeYouTube(page, url, log) {
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
-    await page.waitForTimeout(3000);
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 90000 });
+    await page.waitForTimeout(7000);
 
     const data = await page.evaluate(() => {
         const extractNumber = (text) => {
             if (!text) return 0;
-            text = text.toLowerCase().replace(/,/g, '');
-            if (text.includes('k')) return parseFloat(text) * 1000;
-            if (text.includes('m')) return parseFloat(text) * 1000000;
-            if (text.includes('b')) return parseFloat(text) * 1000000000;
-            return parseInt(text) || 0;
+            text = text.toString().toLowerCase().replace(/,/g, '').replace(/\s/g, '');
+            
+            if (text.includes('k')) return Math.round(parseFloat(text.replace('k', '')) * 1000);
+            if (text.includes('m')) return Math.round(parseFloat(text.replace('m', '')) * 1000000);
+            if (text.includes('b')) return Math.round(parseFloat(text.replace('b', '')) * 1000000000);
+            
+            const num = parseInt(text.replace(/[^0-9]/g, ''));
+            return isNaN(num) ? 0 : num;
         };
 
-        const nameElement = document.querySelector('yt-formatted-string.ytd-channel-name, #channel-name #text');
-        const creatorName = nameElement?.textContent?.trim() || '';
+        let creatorName = '';
+        const nameSelectors = [
+            'yt-formatted-string.ytd-channel-name',
+            '#channel-name #text',
+            'ytd-channel-name yt-formatted-string',
+            '#text'
+        ];
+        for (const selector of nameSelectors) {
+            const el = document.querySelector(selector);
+            if (el && el.textContent.trim()) {
+                creatorName = el.textContent.trim();
+                break;
+            }
+        }
 
-        const subsElement = document.querySelector('#subscriber-count, yt-formatted-string[id="subscriber-count"]');
-        const subsText = subsElement?.textContent?.trim() || '0';
-        const followers = extractNumber(subsText);
+        let followers = 0;
+        const subSelectors = ['#subscriber-count', 'yt-formatted-string#subscriber-count', '#subscribers'];
+        for (const selector of subSelectors) {
+            const el = document.querySelector(selector);
+            if (el) {
+                followers = extractNumber(el.textContent);
+                if (followers > 0) break;
+            }
+        }
 
-        const viewElements = document.querySelectorAll('span.inline-metadata-item:first-child, #metadata-line span:first-child');
+        const viewElements = document.querySelectorAll('span.inline-metadata-item, #metadata-line span, ytd-video-meta-block span');
         let totalViews = 0;
         let videoCount = 0;
-        
-        viewElements.forEach((el, index) => {
-            if (index < 12) {
-                const viewText = el.textContent.trim();
-                if (viewText.includes('views')) {
-                    totalViews += extractNumber(viewText);
+        for (const el of viewElements) {
+            if (videoCount >= 12) break;
+            const text = el.textContent.trim();
+            if (text.includes('views') || text.includes('view')) {
+                const views = extractNumber(text);
+                if (views > 0) {
+                    totalViews += views;
                     videoCount++;
                 }
             }
-        });
+        }
         
         const avgViews = videoCount > 0 ? Math.round(totalViews / videoCount) : 0;
-
-        const engagementRate = followers > 0 ? ((avgViews / followers) * 100).toFixed(2) : '0';
+        const engagementRate = followers > 0 && avgViews > 0 ? ((avgViews / followers) * 100).toFixed(2) : '0.00';
 
         return {
-            creatorName,
+            creatorName: creatorName || 'Unknown',
             followers,
             avgViews,
             engagementRate,
@@ -229,14 +333,12 @@ async function scrapeYouTube(page, url, log) {
         };
     });
 
+    log.info(`YouTube: ${JSON.stringify(data)}`);
     return data;
 }
 
 await crawler.run(platformLinks.map(url => ({ url })));
-
 await Actor.pushData(results);
 
-console.log(`Successfully scraped ${results.length} creators`);
-console.log('Results:', JSON.stringify(results, null, 2));
-
+console.log(`Scraped ${results.length} creators`);
 await Actor.exit();

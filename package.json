@@ -1,7 +1,6 @@
 {
   "name": "influencer-data-scraper",
   "version": "1.0.0",
-  "description": "Scrape influencer data from Instagram, TikTok, YouTube",
   "type": "module",
   "main": "src/main.js",
   "dependencies": {

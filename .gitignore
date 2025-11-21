@@ -1,32 +1,10 @@
-# Dependencies
 node_modules/
-package-lock.json
-
-# Apify storage
 apify_storage/
 storage/
-
-# Environment
 .env
-.env.local
-
-# Build
 dist/
-build/
-
-# Logs
 *.log
-logs/
-
-# OS
 .DS_Store
-Thumbs.db
+package-lock.json
 
-# IDE
-.vscode/
-.idea/
-*.swp
-
-# DO NOT ignore .actor folder - it's needed!
 !.actor/
-!.actor/**
